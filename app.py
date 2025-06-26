@@ -1,9 +1,10 @@
+# paste this full code into app.py
 import pandas as pd
 import streamlit as st
 import io
 
-st.set_page_config(page_title="Verification Summary", layout="wide")
-st.title("📊 Business Verification Summary + Match Reasons")
+st.set_page_config(page_title="Verification Tracker", layout="wide")
+st.title("📊 Business Verification Dashboard")
 
 verif_file = st.file_uploader("Upload Business Verifications (Excel)", type=["xlsx"])
 short_file = st.file_uploader("Upload Short Term Working Capital (CSV)", type=["csv"])
@@ -27,51 +28,72 @@ if verif_file and short_file and new_file:
     df_verif = df_verif.drop_duplicates(subset=["ID_CLEAN", "PHONE_CLEAN"])
 
     logs = {}
+    performance = {}
 
-    def summarize(source_df, label):
-        df = source_df.copy()
+    def process(df_src, label):
+        df = df_src.copy()
         df["PHONE_CLEAN"] = df["PARTICIPANT PHONE"].apply(clean_phone)
         df["ID_CLEAN"] = df["ID"].astype(str).str.strip()
+        df["COUNTY"] = df["COUNTY"].astype(str).str.upper()
 
         df["VERIFIED"] = False
         df["MATCH_METHOD"] = "None"
         df["REASON"] = "No match on ID or Phone"
 
+        # Match by ID
         id_match = df["ID_CLEAN"].isin(df_verif["ID_CLEAN"])
         df.loc[id_match, "VERIFIED"] = True
         df.loc[id_match, "MATCH_METHOD"] = "ID"
         df.loc[id_match, "REASON"] = "Matched by ID"
 
+        # Match by Phone
         unmatched = df[~df["VERIFIED"]]
         phone_match = unmatched["PHONE_CLEAN"].isin(df_verif["PHONE_CLEAN"])
         df.loc[unmatched[phone_match].index, "VERIFIED"] = True
         df.loc[unmatched[phone_match].index, "MATCH_METHOD"] = "Phone"
         df.loc[unmatched[phone_match].index, "REASON"] = "Matched by Phone"
 
-        total = len(df)
-        verified = df["VERIFIED"].sum()
-        id_matches = (df["MATCH_METHOD"] == "ID").sum()
-        phone_matches = (df["MATCH_METHOD"] == "Phone").sum()
-        not_verified = total - verified
+        # Merge with Verification Data (only matched)
+        matched = df[df["VERIFIED"]].merge(
+            df_verif,
+            how="left",
+            left_on=["ID_CLEAN", "PHONE_CLEAN"],
+            right_on=["ID_CLEAN", "PHONE_CLEAN"]
+        )
 
-        logs[label] = df
+        logs[label] = matched
+
+        # County Performance Summary
+        perf = df.groupby("COUNTY").agg(
+            Assigned=("ID", "count"),
+            Verified=("VERIFIED", "sum")
+        ).reset_index()
+        perf["% Verified"] = (perf["Verified"] / perf["Assigned"] * 100).round(1)
+        performance[label] = perf
 
         return {
             "Dataset": label,
-            "Total Assigned": total,
-            "Verified": verified,
-            "Matched by ID": id_matches,
-            "Matched by Phone": phone_matches,
-            "Not Verified": not_verified
+            "Total Assigned": len(df),
+            "Verified": df["VERIFIED"].sum(),
+            "Matched by ID": (df["MATCH_METHOD"] == "ID").sum(),
+            "Matched by Phone": (df["MATCH_METHOD"] == "Phone").sum(),
+            "Not Verified": (~df["VERIFIED"]).sum()
         }
 
-    summary_data = [summarize(df_short, "Short Term"), summarize(df_new, "New Working")]
-    summary_df = pd.DataFrame(summary_data)
+    # Run summaries
+    summary_df = pd.DataFrame([
+        process(df_short, "Short Term"),
+        process(df_new, "New Working")
+    ])
 
     st.subheader("📄 High-Level Summary")
     st.dataframe(summary_df)
 
-    # Download Summary
+    st.subheader("📊 County Performance")
+    for label, perf_df in performance.items():
+        st.markdown(f"**{label}**")
+        st.dataframe(perf_df)
+
     summary_buffer = io.BytesIO()
     summary_df.to_excel(summary_buffer, index=False)
     st.download_button("📥 Download Summary Report",
@@ -79,12 +101,11 @@ if verif_file and short_file and new_file:
                        file_name="Verification_Summary_Report.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # Download per-source log files
     for label, log_df in logs.items():
         log_buffer = io.BytesIO()
         log_df.to_excel(log_buffer, index=False)
         st.download_button(
-            label=f"📥 Download {label} Verification Log with Reasons",
+            label=f"📥 Download {label} Verified Log (With Verification Columns)",
             data=log_buffer,
             file_name=f"{label.replace(' ', '_')}_Verification_Log.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
