@@ -3,8 +3,8 @@ import streamlit as st
 import io
 
 # === Streamlit App Setup ===
-st.set_page_config(page_title="Business Verification Dashboard", layout="wide")
-st.title("📊 Jiinue Business Verification Performance Dashboard")
+st.set_page_config(page_title="Business Verification Tracker", layout="wide")
+st.title("📊 Business Verification Tracker: Field Officer Performance")
 
 # === File Upload ===
 verif_file = st.file_uploader("Upload Business Verifications File (Excel)", type=["xlsx"])
@@ -35,66 +35,87 @@ if verif_file and short_term_file and new_working_file:
     df_verif["ID_CLEAN"] = df_verif["Verified ID Number"].astype(str).str.strip()
     df_verif = df_verif.drop_duplicates(subset=["ID_CLEAN", "PHONE_CLEAN"])
 
-    match_log = {"Matched by ID": 0, "Matched by Phone": 0}
+    # === Initialize match counters ===
+    stats = {
+        "short_term_id": 0,
+        "short_term_phone": 0,
+        "new_working_id": 0,
+        "new_working_phone": 0
+    }
 
-    def process_dataset(df_source, source_label):
+    def process_dataset(df_source, source_name):
         df = df_source.copy()
         df["PHONE_CLEAN"] = df["PARTICIPANT PHONE"].apply(clean_phone)
         df["ID_CLEAN"] = df["ID"].astype(str).str.strip()
-        df["SOURCE"] = source_label
         df["COUNTY"] = df["COUNTY"].astype(str).str.upper()
 
         # Match by ID
         df["VERIFIED"] = df["ID_CLEAN"].isin(df_verif["ID_CLEAN"])
-        match_log["Matched by ID"] += df["VERIFIED"].sum()
+        stats[f"{source_name}_id"] = df["VERIFIED"].sum()
 
-        # Fallback to phone
-        not_verified = df[~df["VERIFIED"]]
-        phone_match = not_verified["PHONE_CLEAN"].isin(df_verif["PHONE_CLEAN"])
-        df.loc[not_verified[phone_match].index, "VERIFIED"] = True
-        match_log["Matched by Phone"] += phone_match.sum()
+        # Match by Phone fallback
+        unmatched = df[~df["VERIFIED"]]
+        phone_match = unmatched["PHONE_CLEAN"].isin(df_verif["PHONE_CLEAN"])
+        df.loc[unmatched[phone_match].index, "VERIFIED"] = True
+        stats[f"{source_name}_phone"] = phone_match.sum()
 
         return df
 
-    df_short_proc = process_dataset(df_short, "Short Term")
-    df_new_proc = process_dataset(df_new, "New Working")
-    df_all = pd.concat([df_short_proc, df_new_proc], ignore_index=True)
+    # Process each dataset separately
+    df_short_verified = process_dataset(df_short, "short_term")
+    df_new_verified = process_dataset(df_new, "new_working")
 
-    # === County-level Aggregation ===
-    def summarize_by_county(df, label):
+    # === County Aggregation ===
+    def summarize(df):
         summary = df.groupby("COUNTY").agg(
-            Assigned=(label, "count"),
+            Assigned=("ID", "count"),
             Verified=("VERIFIED", "sum")
         ).reset_index()
         summary["% Verified"] = (summary["Verified"] / summary["Assigned"] * 100).round(1)
         return summary
 
-    short_summary = summarize_by_county(df_short_proc, "SOURCE")
-    new_summary = summarize_by_county(df_new_proc, "SOURCE")
+    short_summary = summarize(df_short_verified)
+    new_summary = summarize(df_new_verified)
 
-    # === Dashboard Output ===
-    st.header("📍 County-Level Verification Summary")
+    # === Display Results ===
+    st.header("🧾 County-Level Verification Performance")
 
-    st.subheader("Short Term Working Capital")
+    st.subheader("📦 Short Term Working Capital")
     st.dataframe(short_summary)
 
-    st.subheader("New Working Capital")
+    st.subheader("💼 New Working Capital")
     st.dataframe(new_summary)
 
-    st.header("🔍 Match Method Breakdown")
-    total_matches = match_log["Matched by ID"] + match_log["Matched by Phone"]
+    st.header("📈 Match Breakdown")
     st.markdown(f"""
-    - ✅ Matched by ID: **{match_log['Matched by ID']}**
-    - 📞 Matched by Phone: **{match_log['Matched by Phone']}**
-    - 🧮 Total Verified Matches: **{total_matches}**
+    ### Short Term:
+    - ✅ ID Matches: **{stats['short_term_id']}**
+    - 📞 Phone Matches: **{stats['short_term_phone']}**
+    - 🧮 Total Verified: **{stats['short_term_id'] + stats['short_term_phone']}**
+
+    ### New Working Capital:
+    - ✅ ID Matches: **{stats['new_working_id']}**
+    - 📞 Phone Matches: **{stats['new_working_phone']}**
+    - 🧮 Total Verified: **{stats['new_working_id'] + stats['new_working_phone']}**
     """)
 
-    # === Export Full Combined Report ===
-    buffer = io.BytesIO()
-    df_all.to_excel(buffer, index=False)
+    # === Downloads ===
+    buffer_short = io.BytesIO()
+    buffer_new = io.BytesIO()
+
+    df_short_verified.to_excel(buffer_short, index=False)
+    df_new_verified.to_excel(buffer_new, index=False)
+
     st.download_button(
-        label="📥 Download Full Combined Report (with verification flags)",
-        data=buffer,
-        file_name="Combined_Verification_Status_Report.xlsx",
+        label="📥 Download Verified Short Term Report",
+        data=buffer_short,
+        file_name="Verified_Short_Term_Report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    st.download_button(
+        label="📥 Download Verified New Working Report",
+        data=buffer_new,
+        file_name="Verified_New_Working_Report.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
