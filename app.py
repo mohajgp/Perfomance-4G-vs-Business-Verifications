@@ -1,4 +1,5 @@
-# paste this full code into app.py
+# app.py
+
 import pandas as pd
 import streamlit as st
 import io
@@ -61,6 +62,9 @@ if verif_file and short_file and new_file:
             right_on=["ID_CLEAN", "PHONE_CLEAN"]
         )
 
+        # Clean extra blank rows if any
+        matched = matched.dropna(subset=["Name of the Participant", "Verified ID Number", "Verified Phone Number"])
+
         logs[label] = matched
 
         # County Performance Summary
@@ -94,19 +98,24 @@ if verif_file and short_file and new_file:
         st.markdown(f"**{label}**")
         st.dataframe(perf_df)
 
+    # Download Summary Report
     summary_buffer = io.BytesIO()
-    summary_df.to_excel(summary_buffer, index=False)
+    with pd.ExcelWriter(summary_buffer, engine="xlsxwriter") as writer:
+        summary_df.to_excel(writer, sheet_name="Summary", index=False)
+        for label, perf_df in performance.items():
+            perf_df.to_excel(writer, sheet_name=label[:31], index=False)
     st.download_button("📥 Download Summary Report",
-                       data=summary_buffer,
+                       data=summary_buffer.getvalue(),
                        file_name="Verification_Summary_Report.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+    # Download Verified Logs
     for label, log_df in logs.items():
         log_buffer = io.BytesIO()
         log_df.to_excel(log_buffer, index=False)
         st.download_button(
             label=f"📥 Download {label} Verified Log (With Verification Columns)",
-            data=log_buffer,
+            data=log_buffer.getvalue(),
             file_name=f"{label.replace(' ', '_')}_Verification_Log.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
